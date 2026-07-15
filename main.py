@@ -1,176 +1,101 @@
-# PHẦN 1: BÁO CÁO LỖI
-# Lỗi 1: Tạo hồ sơ cho người dùng không tồn tại
-# Dữ liệu test
-# POST /users/99/profile
+# ================== PHẦN 1: BÁO CÁO LỖI ==================
 
-# {
-#     "full_name": "Lê Văn A",
-#     "phone": "0909999999",
-#     "address": "TP.HCM"
-# }
-# Kết quả thực tế: Tạo hồ sơ thành công.
-# Kết quả mong đợi: Báo lỗi "Người dùng không tồn tại".
-# Nguyên nhân: Chưa kiểm tra user_id có tồn tại trong danh sách users.
-# Code sửa:
-# user = next(
-#     (user for user in users if user["id"] == user_id),
-#     None
-# )
-
-# if user is None:
-#     raise HTTPException(
-#         status_code=404,
-#         detail="Người dùng không tồn tại"
-#     )
-# Lỗi 2: Một người dùng có thể tạo nhiều hồ sơ
-# Dữ liệu test
-# POST /users/1/profile
-
-# {
-#     "full_name": "Nguyễn Văn An",
-#     "phone": "0908888888",
-#     "address": "Hà Nội"
-# }
-# Kết quả thực tế: Vẫn tạo được hồ sơ mới.
-# Kết quả mong đợi: Báo lỗi "Người dùng đã có hồ sơ".
-# Nguyên nhân: Kiểm tra profile["id"] == user_id thay vì profile["user_id"] == user_id.
-# Code sửa:
-# existing_profile = next(
-#     (
-#         profile
-#         for profile in profiles
-#         if profile["user_id"] == user_id
-#     ),
-#     None
-# )
-# Lỗi 3: Trùng số điện thoại
-# Dữ liệu test
-# POST /users/2/profile
-
-# {
-#     "full_name": "Trần Thị Bình",
-#     "phone": "0901000001",
-#     "address": "Đà Nẵng"
-# }
-# Kết quả thực tế: Vẫn tạo được hồ sơ.
-# Kết quả mong đợi: Báo lỗi "Số điện thoại đã được sử dụng".
-# Nguyên nhân: Chỉ kiểm tra số điện thoại trong cùng một user_id, trong khi yêu cầu là không được trùng trong toàn hệ thống.
-# Code sửa:
-# duplicated_phone = next(
-#     (
-#         profile
-#         for profile in profiles
-#         if profile["phone"] == profile_data.phone
-#     ),
-#     None
-# )
-
-# PHẦN 2: SOURCE CODE ĐÃ SỬA
-from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel
-
-app = FastAPI()
+# Lỗi 1: Quan hệ 1 - N (Department ↔ Employee)
+# Sai:
+# employees = relationship("Employee", back_populates="department_id")
+# Nguyên nhân:
+# back_populates phải trỏ tới relationship bên kia (department), không phải cột department_id
+# Sửa:
+# employees = relationship("Employee", back_populates="department")
 
 
-class UserProfileCreate(BaseModel):
-    full_name: str
-    phone: str
-    address: str | None = None
+# Lỗi 2: Quan hệ 1 - 1 (Employee ↔ Device)
+# Sai:
+# device = relationship("Device", back_populates="employee")
+# Nguyên nhân:
+# Thiếu uselist=False → bị hiểu thành 1-N
+# Sửa:
+# device = relationship("Device", back_populates="employee", uselist=False)
+# + thêm unique=True cho employee_id
 
 
-users = [
-    {
-        "id": 1,
-        "username": "nguyenvanan",
-        "email": "an@gmail.com"
-    },
-    {
-        "id": 2,
-        "username": "tranthibinh",
-        "email": "binh@gmail.com"
-    }
-]
+# Lỗi 3: Quan hệ N - N (Employee ↔ Project)
+# Sai:
+# projects = relationship("Project", back_populates="employees")
+# employees = relationship("Employee", back_populates="projects")
+# Nguyên nhân:
+# Thiếu secondary → SQLAlchemy không biết bảng trung gian
+# Sửa:
+# thêm secondary=employee_project
 
 
-profiles = [
-    {
-        "id": 10,
-        "full_name": "Nguyễn Văn An",
-        "phone": "0901000001",
-        "address": "Hà Nội",
-        "user_id": 1
-    }
-]
+# ================== PHẦN 2: CODE ĐÃ SỬA ==================
 
+from sqlalchemy import Column, Integer, String, ForeignKey, Table, create_engine
+from sqlalchemy.orm import relationship, sessionmaker, declarative_base
 
-@app.get("/users")
-def get_users():
-    return users
+DATABASE_URL = "sqlite:///./test.db"
 
+engine = create_engine(DATABASE_URL, echo=True)
+SessionLocal = sessionmaker(bind=engine)
+Base = declarative_base()
 
-@app.get("/profiles")
-def get_profiles():
-    return profiles
-
-
-@app.post(
-    "/users/{user_id}/profile",
-    status_code=status.HTTP_201_CREATED
+# Bảng trung gian N-N
+employee_project = Table(
+    "employee_project",
+    Base.metadata,
+    Column("employee_id", Integer, ForeignKey("employees.id"), primary_key=True),
+    Column("project_id", Integer, ForeignKey("projects.id"), primary_key=True)
 )
-def create_profile(
-    user_id: int,
-    profile_data: UserProfileCreate
-):
 
-    user = next(
-        (user for user in users if user["id"] == user_id),
-        None
-    )
+class Department(Base):
+    __tablename__ = "departments"
 
-    if user is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Người dùng không tồn tại"
-        )
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
 
-    existing_profile = next(
-        (
-            profile
-            for profile in profiles
-            if profile["user_id"] == user_id
-        ),
-        None
-    )
+    # 1 - N (đã sửa)
+    employees = relationship("Employee", back_populates="department")
 
-    if existing_profile:
-        raise HTTPException(
-            status_code=409,
-            detail="Người dùng đã có hồ sơ"
-        )
 
-    duplicated_phone = next(
-        (
-            profile
-            for profile in profiles
-            if profile["phone"] == profile_data.phone
-        ),
-        None
-    )
+class Employee(Base):
+    __tablename__ = "employees"
 
-    if duplicated_phone:
-        raise HTTPException(
-            status_code=409,
-            detail="Số điện thoại đã được sử dụng"
-        )
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
 
-    new_profile = {
-        "id": len(profiles) + 1,
-        "full_name": profile_data.full_name,
-        "phone": profile_data.phone,
-        "address": profile_data.address,
-        "user_id": user_id
-    }
+    department_id = Column(Integer, ForeignKey("departments.id"))
+    department = relationship("Department", back_populates="employees")
 
-    profiles.append(new_profile)
+    # 1 - 1 (đã sửa)
+    device = relationship("Device", back_populates="employee", uselist=False)
 
-    return new_profile
+    # N - N (đã sửa)
+    projects = relationship("Project", secondary=employee_project, back_populates="employees")
+
+
+class Device(Base):
+    __tablename__ = "devices"
+
+    id = Column(Integer, primary_key=True)
+    serial_number = Column(String(50), unique=True, nullable=False)
+
+    # unique để đảm bảo 1-1
+    employee_id = Column(Integer, ForeignKey("employees.id"), unique=True)
+    employee = relationship("Employee", back_populates="device")
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String(100), nullable=False)
+
+    # N - N (đã sửa)
+    employees = relationship("Employee", secondary=employee_project, back_populates="projects")
+
+
+# ================== CHẠY ==================
+if __name__ == "__main__":
+    Base.metadata.create_all(bind=engine)
+    print("Đã tạo database thành công!")
